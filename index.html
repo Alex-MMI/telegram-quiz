@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Quiz App</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#0f1720;color:#e6eef8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+  .card{width:100%;max-width:480px;padding:20px;border-radius:12px;background:linear-gradient(180deg,#12202b, #0b1220);box-shadow:0 6px 30px rgba(0,0,0,.6)}
+  .row{display:flex;gap:8px;align-items:center}
+  input[type=text],textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #233544;background:#07111a;color:#dff6ff}
+  .small{width:120px}
+  .ok{color:#00ff9e;font-weight:700}
+  .bad{color:#ff5c5c;font-weight:700}
+  button{width:100%;padding:12px;border-radius:10px;border:none;background:#00adb5;color:#012;cursor:pointer;font-weight:700;margin-top:12px}
+  .muted{color:#9bb0bf;font-size:13px;margin-top:8px}
+  .flex-between{display:flex;justify-content:space-between;align-items:center}
+  .top-actions{display:flex;gap:8px}
+  .back{background:#19303a;color:#dff6ff;padding:8px;border-radius:8px;border:none}
+  .neon{font-weight:800;font-size:1.1rem;text-align:center;margin-top:14px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="flex-between">
+      <div style="font-weight:800">Проверка ответа</div>
+      <div class="top-actions">
+        <button class="back" id="backBtn">Назад</button>
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <label>Идентификатор задания</label>
+      <div class="row" style="margin-top:8px">
+        <input id="taskId" type="text" placeholder="например: task1"/>
+        <div id="taskStatus" style="width:36px;text-align:center"></div>
+      </div>
+      <div class="muted">Введите код задания — появится зелёная галочка, если такое задание есть.</div>
+    </div>
+
+    <div style="margin-top:14px">
+      <label>Ответ</label>
+      <textarea id="answer" rows="2" placeholder="Введите ответ..."></textarea>
+    </div>
+
+    <div style="margin-top:8px">
+      <label><input id="showName" type="checkbox"/> Показать имя в рейтинге</label>
+      <div id="nameRow" class="hidden" style="margin-top:8px">
+        <input id="displayName" type="text" placeholder="Имя для рейтинга"/>
+        <div class="muted">Имя проверяется на плохие слова.</div>
+      </div>
+    </div>
+
+    <button id="sendBtn">Отправить</button>
+
+    <div id="result" class="neon"></div>
+
+    <div style="margin-top:12px" class="flex-between">
+      <div class="muted">Рейтинг: <a id="ratingLink" href="#" style="color:#8be">показать</a></div>
+      <div class="muted">Локальный ID: <span id="localId" style="color:#8be"></span></div>
+    </div>
+
+    <div id="ratingPanel" class="hidden" style="margin-top:12px">
+      <div style="font-weight:700">ТОП</div>
+      <div id="ratingList" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+<script>
+  // Helpers
+  function $(id){return document.getElementById(id)}
+  const taskIdEl = $('taskId'), taskStatus = $('taskStatus'), answerEl = $('answer'),
+        sendBtn = $('sendBtn'), resultEl = $('result'),
+        showName = $('showName'), nameRow = $('nameRow'), displayName = $('displayName'),
+        localIdEl = $('localId'), ratingLink = $('ratingLink'), ratingPanel = $('ratingPanel'), ratingList = $('ratingList'),
+        backBtn = $('backBtn');
+
+  // Local userId for non-Telegram users (persist)
+  let localUserId = localStorage.getItem('quiz_local_id');
+  if (!localUserId) {
+    localUserId = 'l_' + Math.random().toString(36).slice(2,10);
+    localStorage.setItem('quiz_local_id', localUserId);
+  }
+  localIdEl.textContent = localUserId;
+
+  // Telegram WebApp info (if opened inside Telegram)
+  const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+  if (tg) {
+    try { if (tg.expand) tg.expand(); } catch(e){}
+  }
+
+  let currentTaskExists = false;
+
+  // Debounce helper
+  function debounce(fn, ms=300){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms)} }
+
+  async function checkTask(id) {
+    if (!id) { taskStatus.textContent=''; currentTaskExists=false; return; }
+    try {
+      const resp = await fetch(`/api/task/${encodeURIComponent(id)}`);
+      const j = await resp.json();
+      if (j.ok && j.exists) {
+        taskStatus.innerHTML = '<span class="ok">✓</span>';
+        currentTaskExists = true;
+      } else {
+        taskStatus.innerHTML = '<span class="bad">✕</span>';
+        currentTaskExists = false;
+      }
+    } catch (e) {
+      taskStatus.innerHTML = '<span class="bad">?</span>';
+      currentTaskExists = false;
+    }
+  }
+
+  taskIdEl.addEventListener('input', debounce(e => checkTask(e.target.value.trim()), 250));
+
+  showName.addEventListener('change', () => {
+    if (showName.checked) nameRow.classList.remove('hidden'); else nameRow.classList.add('hidden');
+  });
+
+  // Send answer
+  async function sendAnswer() {
+    const task = taskIdEl.value.trim();
+    const answer = answerEl.value.trim();
+    if (!task) { alert('Введите идентификатор задания'); return; }
+    if (!currentTaskExists) { alert('Такого задания нет'); return; }
+    if (!answer) { alert('Введите ответ'); return; }
+
+    // Prepare payload
+    let payload = { task, answer, userId: localUserId, showInRating: false };
+    if (showName.checked) {
+      const nm = displayName.value.trim();
+      if (!nm) { alert('Введите имя для рейтинга'); return; }
+      payload.name = nm;
+      payload.showInRating = true;
+    }
+
+    // If opened inside Telegram, attach initDataUnsafe (user info)
+    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+      payload.initData = tg.initDataUnsafe; // server will use initData.user.id if present
+    }
+
+    // Send
+    sendBtn.disabled = true;
+    resultEl.textContent = '...';
+    try {
+      const resp = await fetch('/api/submit', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const j = await resp.json();
+      if (!j.ok) {
+        resultEl.textContent = j.message || 'Ошибка';
+        resultEl.className = 'neon bad';
+      } else {
+        if (j.correct) {
+          resultEl.textContent = `✅ Правильно! Твой счёт: ${j.score||0}`;
+          resultEl.className = 'neon ok';
+          sendBtn.style.display = 'none';
+        } else {
+          resultEl.textContent = '❌ Неправильно, попробуйте ещё.';
+          resultEl.className = 'neon bad';
+          answerEl.value = '';
+          answerEl.focus();
+        }
+        // store returned userId if server generated one (local_...)
+        if (j.userId && j.userId.startsWith('local_')) {
+          localStorage.setItem('quiz_local_id', j.userId.replace(/^local_/,''));
+          localIdEl.textContent = j.userId.replace(/^local_/,'');
+        }
+      }
+    } catch (e) {
+      resultEl.textContent = 'Ошибка сети';
+      resultEl.className = 'neon bad';
+    } finally {
+      sendBtn.disabled = false;
+      if (tg) try { tg.close(); } catch(e){}
+    }
+  }
+
+  sendBtn.addEventListener('click', sendAnswer);
+  answerEl.addEventListener('keydown', (e)=> {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendAnswer();
+    }
+  });
+
+  backBtn.addEventListener('click', ()=> {
+    if (tg && tg.close) {
+      try { tg.close(); return; } catch(e){}
+    }
+    // если не Telegram — переадресуем на канал (замени ссылку на свою)
+    window.location.href = 'https://t.me/Quiz_Channel_2025';
+  });
+
+  // Рейтинг
+  ratingLink.addEventListener('click', async (e) => {
+    e.preventDefault();
+    ratingPanel.classList.toggle('hidden');
+    if (!ratingPanel.classList.contains('hidden')) {
+      ratingList.innerHTML = 'Загрузка...';
+      try {
+        const r = await fetch('/api/rating?limit=10');
+        const j = await r.json();
+        if (j.ok) {
+          ratingList.innerHTML = j.items.map(it => `<div style="padding:6px 0">${it.rank}. <b>${it.name}</b> — ${it.score}</div>`).join('') || '<div class="muted">Пусто</div>';
+        } else ratingList.innerHTML = 'Ошибка';
+      } catch (err) {
+        ratingList.innerHTML = 'Ошибка сети';
+      }
+    }
+  });
+</script>
+</body>
+</html>

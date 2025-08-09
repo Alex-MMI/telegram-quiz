@@ -1,0 +1,9 @@
+{
+  "users": {},
+  "tasks": {
+    "task1": { "id": "task1", "answer": "время", "points": 10 },
+    "task2": { "id": "task2", "answer": "снег", "points": 10 }
+  },
+  "answers": [],
+  "banned": ["badword1","badword2"]
+}
